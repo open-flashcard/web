@@ -1,36 +1,39 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Open Flashcard Standard
 
-## Getting Started
+**An open, portable JSON schema for flashcard data.**
 
-First, run the development server:
+## The Problem
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+Your flashcards are trapped. Anki uses `.apkg` with SQLite. Quizlet locks data behind their API. SuperMemo has its own
+format. When you want
+to switch apps, share decks, or build your own tools, you're stuck converting between incompatible formats—losing
+formatting, media, and     
+study history along the way.
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Flashcards are simple: a question on one side, an answer on the other. Why is the data so complicated?
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## The Solution
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Open Flashcard Standard (OFS) is a JSON schema that any app can read and write. No databases, no proprietary
+formats—just plain JSON files   
+you can open in any text editor.
 
-## Learn More
+### Features
 
-To learn more about Next.js, take a look at the following resources:
+- **Multi-sided cards** — Classic term/definition, or cards with multiple sides for complex topics
+- **Rich content types** — Plain text, Markdown, HTML, LaTeX math, code blocks with syntax highlighting
+- **Media support** — Images, audio, video, and text-to-speech with full accessibility (captions, descriptions)
+- **Multiple choice** — Quiz-style cards with single or multiple correct answers, hints, and explanations
+- **Spaced repetition** — Metadata fields for SRS algorithms (compatible with FSRS, SM-2, Leitner)
+- **Extensible** — Custom content types via plugins, arbitrary metadata, deck inheritance
+- **Internationalization** — RTL support, language tags, custom fonts
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+### Contributing
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+We welcome contributions! Whether it's adding content types to the schema, building importers/exporters for other
+formats, or creating sample
+decks—open an issue or PR in the relevant repo.
 
-## Deploy on Vercel
+License
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+MIT - Use it however you want. Your flashcards belong to you.   
