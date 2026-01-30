@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs/promises';
 import path from 'path';
+import { getFlashcardDataBasePath } from '@/lib/repos/fs-repo';
 
 export async function POST(request: NextRequest) {
     try {
@@ -32,7 +33,9 @@ export async function POST(request: NextRequest) {
         const originalName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
         const fileName = originalName.endsWith('.json') ? originalName : `${originalName}.json`;
 
-        const saveDir = path.join(process.cwd(), 'flashcards');
+        // Use shared data base path so uploads work both locally and on Vercel.
+        // In production this resolves to a writable /tmp directory.
+        const saveDir = path.join(getFlashcardDataBasePath(), 'flashcards');
         await fs.mkdir(saveDir, { recursive: true });
 
         const savePath = path.join(saveDir, fileName);

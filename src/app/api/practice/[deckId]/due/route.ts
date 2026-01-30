@@ -5,8 +5,8 @@ import { PracticeEngine } from 'ofc-ts';
 
 // Helper to get repo and engine
 async function getEngine(deckId: string) {
-    // Initialize repo at project root so we can access public/samples or other dirs
-    const repo = new NextFSFlashcardRepository(process.cwd());
+    // Initialize repo with default base path (handles local dev vs Vercel serverless)
+    const repo = new NextFSFlashcardRepository();
 
     // Let's assume deckId passed in URL is URL-encoded path relative to basePath.
     const decodedId = decodeURIComponent(deckId);

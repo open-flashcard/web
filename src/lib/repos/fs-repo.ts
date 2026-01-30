@@ -2,10 +2,27 @@ import { FlashcardRepository, Deck, CardState, ReviewLog, Card } from 'ofc-ts';
 import fs from 'fs/promises';
 import path from 'path';
 
+// Determine where flashcard data (uploaded decks + activity files) should live.
+// - In local/dev we default to the Next.js project cwd (so files are committed alongside the repo)
+// - On Vercel and other serverless environments, the code directory (/var/task) is read‑only,
+//   so we fall back to /tmp, which is writable but ephemeral.
+export function getFlashcardDataBasePath(): string {
+    if (process.env.FLASHCARD_DATA_DIR) {
+        return process.env.FLASHCARD_DATA_DIR;
+    }
+
+    if (process.env.VERCEL === '1') {
+        // Writable scratch space for Vercel serverless functions
+        return '/tmp/ofs-data';
+    }
+
+    return process.cwd();
+}
+
 export class NextFSFlashcardRepository implements FlashcardRepository {
     private basePath: string;
 
-    constructor(basePath: string) {
+    constructor(basePath: string = getFlashcardDataBasePath()) {
         this.basePath = basePath;
     }
 
@@ -154,6 +171,10 @@ export class NextFSFlashcardRepository implements FlashcardRepository {
     async saveDeckActivity() {
         if (!this.currentDeckPath) return;
         const activityPath = this.getActivityPath(this.currentDeckPath);
+
+        // Ensure directory exists before writing (especially important on fresh /tmp in serverless)
+        const activityDir = path.dirname(activityPath);
+        await fs.mkdir(activityDir, { recursive: true });
 
         // Construct persistable object from cache (filtering only for this deck? 
         // For now dump everything if we assume 1 deck per repo instance usage)
