@@ -23,7 +23,7 @@ import {
 export type OptionValue = string | number | boolean
 
 export interface VoiceSetting {
-  voice: string
+  voice: string // empty: the server's own default voice (some models have no named voices)
   speed?: number // 1 is the voice's natural pace
   // This language's own values for extra request fields (e.g. a model's
   // language code), over the server-wide `options`.
@@ -84,10 +84,11 @@ export function voiceSpeed(lang?: string) {
   return voiceFor(getTtsSettings(), lang)?.speed ?? 1
 }
 
-// Whether the server is set up to speak this language at all.
+// Whether the server is set up to speak this language at all: a language row
+// exists, even with no voice named — then the server picks its default.
 export function serverSpeaks(lang?: string) {
   const s = getTtsSettings()
-  return s.enabled && Boolean(s.url && s.model && voiceFor(s, lang)?.voice)
+  return s.enabled && Boolean(s.url && s.model && voiceFor(s, lang))
 }
 
 // Returns audio for `text`, from the cache or the server. Throws when the server
@@ -116,9 +117,9 @@ export async function synthesize(
   if (cached) return cached.blob
 
   const { audio: file } = await generateSpeech({
-    model: speechProvider(settings, extra).speech(settings.model),
+    model: speechProvider(settings, extra, !voice.voice).speech(settings.model),
     text,
-    voice: voice.voice,
+    voice: voice.voice || undefined,
     speed,
     // WAV needs no encoder on the server; mp3 often needs ffmpeg there.
     outputFormat: "wav",
@@ -136,21 +137,23 @@ export async function synthesize(
   return audio
 }
 
-// The AI SDK's OpenAI speech model pointed at the server. Fields beyond the
-// OpenAI API (from the options form) join the request body on the way out.
+// The AI SDK's OpenAI speech model pointed at the server. On the way out,
+// fields beyond the OpenAI API (from the options form) join the request body,
+// and with no voice named the SDK's own default ("alloy", an OpenAI voice) is
+// taken out, so the server uses its default instead.
 function speechProvider(
   settings: TtsSettings,
-  extra: Record<string, OptionValue>
+  extra: Record<string, OptionValue>,
+  serverVoice: boolean
 ) {
   return createOpenAI({
     baseURL: join(settings.url, settings.prefix),
     apiKey: "none", // the SDK requires one; local servers don't check it
     fetch: (input, init) => {
-      if (Object.keys(extra).length && typeof init?.body === "string") {
-        init = {
-          ...init,
-          body: JSON.stringify({ ...JSON.parse(init.body), ...extra }),
-        }
+      if (typeof init?.body === "string") {
+        const body = { ...JSON.parse(init.body), ...extra }
+        if (serverVoice) delete body.voice
+        init = { ...init, body: JSON.stringify(body) }
       }
       return fetch(input, init)
     },
@@ -173,6 +176,9 @@ export interface Discovery {
   models: string[] // empty: the server loads one on first use, or doesn't say
   fields: SpeechField[] | null // null: no OpenAPI document; OpenAI fields only
   voiceList: VoiceList | null // how to ask for voices, if the server can say
+  // How to load a model the server doesn't have loaded yet, if its OpenAPI
+  // document offers a way: a POST on its models route taking the model's name.
+  loader: { endpoint: string; param: string } | null
 }
 
 // Where the server lists voices: an endpoint from its OpenAPI document, or the
@@ -207,7 +213,9 @@ export async function discover(url: string): Promise<Discovery> {
   const body = (await res.json()) as { data?: { id: string }[] }
   const models = body.data?.map((m) => m.id) ?? []
 
-  if (!doc || !speech) return { prefix, models, fields: null, voiceList: null }
+  if (!doc || !speech) {
+    return { prefix, models, fields: null, voiceList: null, loader: null }
+  }
 
   const schema = resolve(
     doc,
@@ -237,7 +245,28 @@ export async function discover(url: string): Promise<Discovery> {
       ? { choices: voiceChoices }
       : null
 
-  return { prefix, models, fields, voiceList }
+  const load = doc.paths?.[`${prefix}/models`]?.post
+  const param = load?.parameters?.find((p) => p.in === "query")?.name
+  const loader = param ? { endpoint: `${prefix}/models`, param } : null
+
+  return { prefix, models, fields, voiceList, loader }
+}
+
+// Asks the server to load a model (and download it if it must), through the
+// route its OpenAPI document describes. Slow the first time.
+export async function loadModel(url: string, found: Discovery, model: string) {
+  if (!found.loader) throw new Error("This server can’t load models")
+  const { endpoint, param } = found.loader
+  const res = await fetch(
+    join(url, `${endpoint}?${param}=${encodeURIComponent(model)}`),
+    { method: "POST" }
+  )
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "")
+    throw new Error(
+      `HTTP ${res.status}${detail ? `: ${detail.slice(0, 200)}` : ""}`
+    )
+  }
 }
 
 // The voices a model offers, as the server reports them; empty when it can't

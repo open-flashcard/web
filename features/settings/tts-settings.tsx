@@ -4,7 +4,9 @@ import * as React from "react"
 import { useLiveQuery } from "dexie-react-hooks"
 import {
   AudioLinesIcon,
+  DownloadIcon,
   GlobeIcon,
+  Loader2Icon,
   PlayIcon,
   PlusIcon,
   SlidersHorizontalIcon,
@@ -18,6 +20,7 @@ import {
   clearTtsCache,
   discover,
   listVoices,
+  loadModel,
   setTtsSettings,
   synthesize,
   useTtsSettings,
@@ -115,7 +118,12 @@ export function TtsSettings() {
         </form>
         <StatusLine state={server.state} connected={() => "Connected"} />
         {found && (
-          <ModelPicker settings={settings} found={found} update={update} />
+          <ModelPicker
+            settings={settings}
+            found={found}
+            update={update}
+            reconnect={server.connect}
+          />
         )}
       </Step>
 
@@ -130,33 +138,155 @@ function ModelPicker({
   settings,
   found,
   update,
+  reconnect,
 }: {
   settings: TtsSettings
   found: Discovery
   update: Update
+  reconnect: () => void
 }) {
+  const none = found.models.length === 0
   return (
-    <label className="flex flex-col gap-1 text-sm">
-      <span className="font-medium">Model</span>
-      {found.models.length ? (
-        <select
-          className={field}
-          value={settings.model}
-          onChange={(e) => update({ model: e.target.value })}
-        >
-          {found.models.map((m) => (
-            <option key={m}>{m}</option>
-          ))}
-        </select>
-      ) : (
+    <div className="flex flex-col gap-2 text-sm">
+      <label className="flex flex-col gap-1">
+        <span className="font-medium">Model</span>
+        {none ? (
+          <input
+            className={field}
+            value={settings.model}
+            onChange={(e) => update({ model: e.target.value.trim() })}
+            placeholder="Model ID"
+          />
+        ) : (
+          <select
+            className={field}
+            value={settings.model}
+            onChange={(e) => update({ model: e.target.value })}
+          >
+            {found.models.map((m) => (
+              <option key={m}>{m}</option>
+            ))}
+          </select>
+        )}
+      </label>
+      {none && (
+        <p className="text-xs text-muted-foreground">
+          The server lists no models — some list only the ones they have loaded.{" "}
+          {found.loader
+            ? "Load one below, or type its ID above."
+            : "Type a model ID; the server may load it on first use."}
+        </p>
+      )}
+      {found.loader &&
+        (none ? (
+          <LoadModel
+            found={found}
+            url={settings.url}
+            onLoaded={(model) => {
+              update({ model })
+              reconnect()
+            }}
+          />
+        ) : (
+          <details className="text-xs">
+            <summary className="cursor-pointer text-muted-foreground">
+              Load another model
+            </summary>
+            <div className="mt-2">
+              <LoadModel
+                found={found}
+                url={settings.url}
+                onLoaded={(model) => {
+                  update({ model })
+                  reconnect()
+                }}
+              />
+            </div>
+          </details>
+        ))}
+    </div>
+  )
+}
+
+// Loads a model on the server through the route its OpenAPI document
+// describes; the first load of a model downloads it, which can take minutes.
+function LoadModel({
+  found,
+  url,
+  onLoaded,
+}: {
+  found: Discovery
+  url: string
+  onLoaded: (model: string) => void
+}) {
+  const [id, setId] = React.useState("")
+  const [state, setState] = React.useState<
+    | { status: "idle" }
+    | { status: "loading" }
+    | { status: "error"; error: string }
+  >({ status: "idle" })
+
+  async function load() {
+    const model = id.trim()
+    if (!model) return
+    setState({ status: "loading" })
+    try {
+      await loadModel(url, found, model)
+      setState({ status: "idle" })
+      setId("")
+      onLoaded(model)
+    } catch (e) {
+      setState({ status: "error", error: (e as Error).message })
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <form
+        className="flex gap-2"
+        onSubmit={(e) => {
+          e.preventDefault()
+          load()
+        }}
+      >
         <input
           className={field}
-          value={settings.model}
-          onChange={(e) => update({ model: e.target.value.trim() })}
-          placeholder="The server lists no models — type one"
+          value={id}
+          onChange={(e) => setId(e.target.value)}
+          placeholder="Model ID, e.g. a Hugging Face repo"
+          aria-label="Model to load"
+          disabled={state.status === "loading"}
         />
-      )}
-    </label>
+        <Button
+          type="submit"
+          variant="outline"
+          size="sm"
+          className="h-8"
+          disabled={!id.trim() || state.status === "loading"}
+        >
+          {state.status === "loading" ? (
+            <Loader2Icon className="animate-spin" data-icon="inline-start" />
+          ) : (
+            <DownloadIcon data-icon="inline-start" />
+          )}
+          {state.status === "loading" ? "Loading…" : "Load"}
+        </Button>
+      </form>
+      <p
+        className={cn(
+          "text-xs",
+          state.status === "error"
+            ? "text-destructive"
+            : "text-muted-foreground"
+        )}
+      >
+        {state.status === "error"
+          ? `Couldn’t load it: ${state.error}`
+          : state.status === "loading"
+            ? "The server is loading the model — the first time, it downloads it too."
+            : `Uses ${found.loader!.endpoint} on the server.`}
+      </p>
+    </div>
   )
 }
 
@@ -286,7 +416,9 @@ function Summary({
       ? "voices…"
       : voices.length
         ? `${voices.length} voices`
-        : null,
+        : found.voiceList
+          ? "no named voices for this model"
+          : null,
     voiceSource,
     found.fields
       ? `${found.fields.length} options from openapi.json`
@@ -386,12 +518,28 @@ function LanguageRow({
   onRemove: () => void
 }) {
   const [open, setOpen] = React.useState(false)
-  const [test, setTest] = React.useState<string>()
+  const [test, setTest] = React.useState<
+    { ok: boolean; text: string } | undefined
+  >()
   const value = row.setting
-  const overrides = Object.keys(value?.options ?? {}).length
+  // A field the schema names for language (lang_code, language…) changes per
+  // language almost always, so it sits in the row instead of the options.
+  const langFields = fields.filter((f) => /lang/i.test(f.name))
+  const otherFields = fields.filter((f) => !/lang/i.test(f.name))
+  const overrides = Object.keys(value?.options ?? {}).filter((k) =>
+    otherFields.some((f) => f.name === k)
+  ).length
+
+  const setOption = (name: string, v: string) => {
+    if (!value) return
+    const options = { ...value.options }
+    if (v) options[name] = v
+    else delete options[name]
+    onChange({ ...value, options })
+  }
 
   async function play() {
-    setTest("…")
+    setTest({ ok: true, text: "Speaking…" })
     const started = performance.now()
     try {
       const sample = SAMPLES[row.tag.split("-")[0]] ?? SAMPLES.en
@@ -400,9 +548,15 @@ function LanguageRow({
       const audio = new Audio(url)
       audio.onended = () => URL.revokeObjectURL(url)
       await audio.play()
-      setTest(`${Math.round(performance.now() - started)} ms`)
-    } catch {
-      setTest("failed")
+      setTest({
+        ok: true,
+        text: `Played in ${Math.round(performance.now() - started)} ms`,
+      })
+    } catch (e) {
+      setTest({
+        ok: false,
+        text: `The server couldn’t speak it (${(e as Error).message}). The reason is in the server’s own log.`,
+      })
     }
   }
 
@@ -435,9 +589,7 @@ function LanguageRow({
                     onChange({ ...value, voice: e.target.value })
                   }
                 >
-                  <option value="" disabled>
-                    Choose a voice…
-                  </option>
+                  <option value="">Server’s default voice</option>
                   {value.voice && !voices.includes(value.voice) && (
                     <option>{value.voice}</option>
                   )}
@@ -450,13 +602,24 @@ function LanguageRow({
                   className={field}
                   value={value.voice}
                   aria-label={`${row.tag} voice`}
-                  placeholder="Voice name"
+                  placeholder="Server’s default voice — or type a name"
                   onChange={(e) =>
                     onChange({ ...value, voice: e.target.value })
                   }
                 />
               )}
             </div>
+            {langFields.map((f) => (
+              <input
+                key={f.name}
+                className={cn(field, "w-16 shrink-0 text-center font-mono")}
+                value={String(value.options?.[f.name] ?? "")}
+                placeholder={String(globalOptions[f.name] ?? f.default ?? "")}
+                aria-label={`${row.tag} ${f.name}`}
+                title={`${f.title} (${f.name}) — as this model names ${languageName(row.tag)}`}
+                onChange={(e) => setOption(f.name, e.target.value.trim())}
+              />
+            ))}
             {hasSpeed && (
               <select
                 className={cn(field, "w-18 shrink-0")}
@@ -477,13 +640,12 @@ function LanguageRow({
               variant="ghost"
               size="icon-sm"
               aria-label={`Test ${row.tag} voice`}
-              title={test ? `Test · ${test}` : "Test"}
-              disabled={!value.voice}
+              title="Test"
               onClick={play}
             >
               <PlayIcon />
             </Button>
-            {fields.length > 0 && (
+            {otherFields.length > 0 && (
               <Button
                 variant={open || overrides ? "secondary" : "ghost"}
                 size="icon-sm"
@@ -513,20 +675,31 @@ function LanguageRow({
               onClick={() => onChange({ voice: "" })}
             >
               <PlusIcon data-icon="inline-start" />
-              Choose a voice
+              {voices.length ? "Choose a voice" : "Use this server"}
             </Button>
           </div>
         )}
       </div>
 
+      {value && test && (
+        <p
+          className={cn(
+            "text-xs sm:ps-40",
+            test.ok ? "text-muted-foreground" : "text-destructive"
+          )}
+        >
+          {test.text}
+        </p>
+      )}
+
       {value && open && (
         <div className="rounded-xl bg-muted/50 p-3">
           <p className="text-xs text-muted-foreground">
-            Values for {languageName(row.tag)} only — for example a model’s
-            language code. Empty fields use the options for every language.
+            Values for {languageName(row.tag)} only. Empty fields use the
+            options for every language.
           </p>
           <OptionsForm
-            fields={fields}
+            fields={otherFields}
             value={value.options ?? {}}
             fallback={globalOptions}
             onChange={(options) => onChange({ ...value, options })}
